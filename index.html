@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokyo + LA Clock</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #f5f5f7;
+    --muted: #9a9aa4;
+    --line: #26262c;
+    --tokyo: #ff5a7a;
+    --la: #ffb547;
+    --u: 1vmin;              /* 1% of the 240x240 LCD; switched to px in preview mode */
+  }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "SF Pro Display", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .stage { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+  .face {
+    width: calc(var(--u) * 100); height: calc(var(--u) * 100);
+    position: relative; overflow: hidden; box-sizing: border-box;
+    display: grid; grid-template-rows: 1fr auto 1fr;
+    padding: calc(var(--u) * 5) calc(var(--u) * 6) calc(var(--u) * 6);
+    background: #000;
+  }
+
+  .zone { display: flex; flex-direction: column; justify-content: center; line-height: 1; }
+  .head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: calc(var(--u) * 6); font-weight: 700;
+  }
+  .label { display: inline-flex; align-items: baseline; gap: calc(var(--u) * 1.5); letter-spacing: .06em; white-space: nowrap; }
+  .tokyo .label { color: var(--tokyo); }
+  .la .label    { color: var(--la); }
+  .icon { letter-spacing: 0; }
+  .date { color: var(--muted); font-weight: 600; letter-spacing: .02em; font-size: .84em; white-space: nowrap; }
+
+  .time {
+    margin-top: calc(var(--u) * 1.5);
+    font-size: calc(var(--u) * 23); font-weight: 800;
+    font-variant-numeric: tabular-nums; letter-spacing: -.035em;
+    white-space: nowrap;
+  }
+  .sec  { font-size: .36em; font-weight: 600; opacity: .55; margin-left: .1em; letter-spacing: 0; }
+  .ampm { font-size: .3em; font-weight: 700; opacity: .8; margin-left: .2em; letter-spacing: .02em; }
+
+  .divider {
+    display: flex; align-items: center; gap: calc(var(--u) * 2.5);
+    font-size: calc(var(--u) * 5); font-weight: 700; letter-spacing: .1em;
+    color: var(--muted); white-space: nowrap;
+  }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: max(1px, calc(var(--u) * .5)); background: var(--line);
+  }
+
+  /* seconds progress bar along the bottom edge */
+  .bar { position: absolute; left: 0; bottom: 0; height: calc(var(--u) * 1.6); width: 100%; background: #000; }
+  .bar i {
+    display: block; height: 100%; width: 100%;
+    background: linear-gradient(90deg, var(--tokyo), var(--la));
+    transform-origin: left; transform: scaleX(0);
+  }
+
+  /* Preview mode (opened in a normal browser, not on the Kraken) */
+  html:not(.kraken) body { background: #141417; }
+  html:not(.kraken) { --u: 3.6px; }          /* 360px preview, same proportions as 240x240 */
+  html:not(.kraken) .stage { gap: 22px; }
+  html:not(.kraken) .face { border-radius: 10px; box-shadow: 0 0 0 6px #222, 0 20px 60px rgba(0,0,0,.6); }
+  .note { display: none; max-width: 360px; margin: 0; padding: 0 16px; text-align: center; font-size: 13px; line-height: 1.5; color: #9a9aa3; }
+  html:not(.kraken) .note { display: block; }
+  .note code { color: #e4e4e7; background: #222227; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="face">
+      <div class="zone tokyo">
+        <div class="head">
+          <span class="label"><span class="icon" id="tokyo-icon"></span>TOKYO</span>
+          <span class="date" id="tokyo-date"></span>
+        </div>
+        <div class="time" id="tokyo-time"></div>
+      </div>
+
+      <div class="divider" id="diff"></div>
+
+      <div class="zone la">
+        <div class="head">
+          <span class="label"><span class="icon" id="la-icon"></span>LOS ANGELES</span>
+          <span class="date" id="la-date"></span>
+        </div>
+        <div class="time" id="la-time"></div>
+      </div>
+
+      <div class="bar"><i id="progress"></i></div>
+    </div>
+
+    <p class="note">
+      Preview, scaled up from the Kraken Plus's 240×240 screen.
+      Add <code>?h24=1</code> to the URL for 24-hour time.
+    </p>
+  </div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  if (params.get("kraken") === "1") document.documentElement.classList.add("kraken");
+  const h24 = params.get("h24") === "1";
+
+  const zones = [
+    { key: "tokyo", tz: "Asia/Tokyo" },
+    { key: "la",    tz: "America/Los_Angeles" },
+  ];
+
+  const fmt = {}, numFmt = {};
+  for (const z of zones) {
+    fmt[z.key] = new Intl.DateTimeFormat("en-US", {
+      timeZone: z.tz, month: "short", day: "numeric", weekday: "short",
+      hour: h24 ? "2-digit" : "numeric", minute: "2-digit", second: "2-digit",
+      hourCycle: h24 ? "h23" : "h12",
+    });
+    numFmt[z.key] = new Intl.DateTimeFormat("en-US", {
+      timeZone: z.tz, year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", hourCycle: "h23",
+    });
+  }
+
+  const el = id => document.getElementById(id);
+  const progress = el("progress");
+
+  function partsOf(f, d) {
+    const o = {};
+    for (const p of f.formatToParts(d)) o[p.type] = p.value;
+    return o;
+  }
+  // Minutes this zone is ahead of UTC (handles DST automatically)
+  function offsetMin(key, d) {
+    const p = partsOf(numFmt[key], d);
+    const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute);
+    return Math.round((asUTC - Math.floor(d.getTime() / 60000) * 60000) / 60000);
+  }
+
+  let lastSec = -1;
+  function render() {
+    const now = new Date();
+    const sec = now.getSeconds();
+
+    progress.style.transform = `scaleX(${((sec + now.getMilliseconds() / 1000) / 60).toFixed(4)})`;
+
+    if (sec !== lastSec) {
+      lastSec = sec;
+      for (const z of zones) {
+        const p = partsOf(fmt[z.key], now);
+        const hour24 = +partsOf(numFmt[z.key], now).hour % 24;
+        const ampm = h24 ? "" : `<span class="ampm">${p.dayPeriod}</span>`;
+        el(`${z.key}-time`).innerHTML =
+          `${p.hour}:${p.minute}<span class="sec">${p.second}</span>${ampm}`;
+        el(`${z.key}-date`).textContent = `${p.weekday} ${p.month} ${p.day}`;
+        el(`${z.key}-icon`).textContent = (hour24 >= 6 && hour24 < 18) ? "☀\uFE0E" : "☾\uFE0E";
+      }
+      const diffH = (offsetMin("tokyo", now) - offsetMin("la", now)) / 60;
+      el("diff").textContent = `+${diffH}H`;
+    }
+    requestAnimationFrame(render);
+  }
+  render();
+})();
+</script>
+</body>
+</html>
